@@ -1,10 +1,8 @@
 use anyhow::Result;
 use glob::glob;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::metadata::ParquetMetaDataReader;
 use std::fs::File;
 use std::os::unix::fs::MetadataExt;
-use tokio::fs;
 
 #[derive(Debug)]
 struct FileInfo {
@@ -15,7 +13,7 @@ struct FileInfo {
 
 impl FileInfo {
     fn is_candidate(&self) -> bool {
-        if self.file_size < 64 * 1024 || self.avg_row_group_size < 32 * 1024 {
+        if self.file_size < 64 * 1024 * 1024 || self.avg_row_group_size < 32 * 1024 * 1024 {
             return true;
         }
         return false;
