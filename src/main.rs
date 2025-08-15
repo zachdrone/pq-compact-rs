@@ -21,7 +21,7 @@ impl FileInfo {
     }
 }
 
-async fn get_file_sizes(directory: &str) -> Result<Vec<FileInfo>, anyhow::Error> {
+async fn get_compaction_candidates(directory: &str) -> Result<Vec<FileInfo>, anyhow::Error> {
     let mut handles = Vec::new();
     let mut results = Vec::new();
     for entry in glob(&format!("{}/*.parquet", directory)).expect("Failed to read glob pattern") {
@@ -57,7 +57,7 @@ async fn get_file_sizes(directory: &str) -> Result<Vec<FileInfo>, anyhow::Error>
 
 #[tokio::main]
 async fn main() {
-    let results = get_file_sizes("files").await.unwrap();
+    let results = get_compaction_candidates("files").await.unwrap();
 
     for result in results {
         println!("{:?}", result);
