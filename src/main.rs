@@ -1,6 +1,7 @@
 use anyhow::Result;
 use glob::glob;
 use parquet::file::metadata::ParquetMetaDataReader;
+use std::collections::HashMap;
 use std::fs::File;
 use std::os::unix::fs::MetadataExt;
 
@@ -45,7 +46,10 @@ async fn get_file_sizes(directory: &str) -> Result<Vec<FileInfo>, anyhow::Error>
     }
 
     for handle in handles {
-        results.push(handle.await.unwrap());
+        let file_info = handle.await.unwrap();
+        if file_info.is_candidate() {
+            results.push(file_info)
+        }
     }
 
     Ok(results)
