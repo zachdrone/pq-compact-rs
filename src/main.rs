@@ -22,33 +22,33 @@ impl FileInfo {
 }
 
 async fn get_compaction_candidates(directory: &str) -> Result<Vec<FileInfo>, anyhow::Error> {
-    let mut handles = Vec::new();
+    let mut handles: Vec<tokio::task::JoinHandle<Result<FileInfo>>> = Vec::new();
     let mut results = Vec::new();
     for entry in glob(&format!("{}/*.parquet", directory)).expect("Failed to read glob pattern") {
         if let Ok(fp) = entry {
             handles.push(tokio::spawn(async move {
-                let file_size = tokio::fs::metadata(&fp).await.unwrap().size();
-                let file = File::open(&fp).unwrap();
+                let file_size = tokio::fs::metadata(&fp).await?.size();
+                let file = File::open(&fp)?;
                 let md = ParquetMetaDataReader::new()
                     .with_page_indexes(true)
-                    .parse_and_finish(&file)
-                    .unwrap();
+                    .parse_and_finish(&file)?;
                 let total_size: i64 = md.row_groups().iter().map(|rg| rg.total_byte_size()).sum();
                 let row_group_count = md.num_row_groups();
 
-                FileInfo {
+                Ok(FileInfo {
                     path: fp.to_str().unwrap().to_string(),
                     file_size: file_size,
                     avg_row_group_size: total_size / (row_group_count as i64),
-                }
+                })
             }))
         }
     }
 
     for handle in handles {
-        let file_info = handle.await.unwrap();
-        if file_info.is_candidate() {
-            results.push(file_info)
+        if let Ok(file_info) = handle.await? {
+            if file_info.is_candidate() {
+                results.push(file_info)
+            }
         }
     }
 
