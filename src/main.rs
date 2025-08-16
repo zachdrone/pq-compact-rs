@@ -55,6 +55,8 @@ async fn get_compaction_candidates(directory: &str) -> Result<Vec<FileInfo>, any
     Ok(results)
 }
 
+async fn plan_file_compaction(&candidates: Vec<FileInfo>) {}
+
 #[tokio::main]
 async fn main() {
     let results = get_compaction_candidates("files").await.unwrap();
