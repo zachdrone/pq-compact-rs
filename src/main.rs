@@ -5,7 +5,7 @@ use parquet::file::metadata::ParquetMetaDataReader;
 use parquet::schema::types::{BasicTypeInfo, SchemaDescriptor};
 use parquet::{
     basic::LogicalType,
-    basic::{ConvertedType, Repetition, Type as PhysicalType},
+    basic::{ConvertedType, Repetition, TimeUnit, Type as PhysicalType},
     schema::{parser, printer, types::Type},
 };
 use serde::Serialize;
@@ -44,8 +44,7 @@ async fn get_compaction_candidates(directory: &str) -> Result<Vec<FileInfo>, any
                     .parse_and_finish(&file)?;
                 let total_size: i64 = md.row_groups().iter().map(|rg| rg.total_byte_size()).sum();
                 let row_group_count = md.num_row_groups();
-                dbg!(&md.file_metadata().schema_descr().root_schema());
-                fingerprint_schema_exact(&md.file_metadata().schema_descr());
+                let schema = md.file_metadata().schema_descr();
 
                 Ok(FileInfo {
                     path: fp.to_str().unwrap().to_string(),
@@ -67,35 +66,95 @@ async fn get_compaction_candidates(directory: &str) -> Result<Vec<FileInfo>, any
     Ok(results)
 }
 
-// async fn plan_file_compaction(candidates: &Vec<FileInfo>) {}
-
-fn emit_type(h: &mut Hasher, t: &Type) {
-    let mut line = String::new();
-
-    let info: parquet::schema::types::BasicTypeInfo = t.get_basic_info().clone();
-    let name = info.name();
-    let rep = if info.has_repetition() {
-        match info.repetition() {
-            Repetition::REQUIRED => "REQUIRED",
-            Repetition::OPTIONAL => "OPTIONAL",
-            Repetition::REPEATED => "REPEATED",
-        }
+fn build_node(t: &Type) -> CanonNode {
+    let basic = t.get_basic_info();
+    let name = basic.name();
+    let rep = if basic.has_repetition() {
+        Some(basic.repetition().to_string())
     } else {
-        ""
+        None
     };
-    let field_id = if info.has_id() {
-        info.id().to_string()
+    let id = if basic.has_id() {
+        Some(basic.id())
     } else {
-        String::new()
+        None
     };
+    let logical = effective_logical(t);
+}
 
-    let logical = match info.logical_type() {
-        Some(v) => match v.try_into(String) {
-            Ok(val) => val,
-            Err(_) => "",
-        },
-        None => "",
-    };
+fn rep_to_str(r: Repetition) -> &'static str {
+    match r {
+        Repetition::REQUIRED => "required",
+        Repetition::OPTIONAL => "optional",
+        Repetition::REPEATED => "repeated",
+    }
+}
+
+fn physical_to_str(p: PhysicalType) -> &'static str {
+    match p {
+        PhysicalType::BOOLEAN => "boolean",
+        PhysicalType::INT32 => "int32",
+        PhysicalType::INT64 => "int64",
+        PhysicalType::INT96 => "int96",
+        PhysicalType::FLOAT => "float",
+        PhysicalType::DOUBLE => "double",
+        PhysicalType::BYTE_ARRAY => "byte_array",
+        PhysicalType::FIXED_LEN_BYTE_ARRAY => "fixed_len_byte_array",
+    }
+}
+
+fn unit_to_str(u: TimeUnit) -> &'static str {
+    match u {
+        TimeUnit::MILLIS(_) => "millis",
+        TimeUnit::MICROS(_) => "micros",
+        TimeUnit::NANOS(_) => "nanos",
+    }
+}
+
+fn effective_logical(t: &Type) -> Option<CanonLogical> {
+    let basic = t.get_basic_info();
+
+    if let Some(lt) = basic.logical_type() {
+        return Some(match lt {
+            LogicalType::String => CanonLogical::String,
+            LogicalType::Map => CanonLogical::Map,
+            LogicalType::List => CanonLogical::List,
+            LogicalType::Enum => CanonLogical::Enum,
+            LogicalType::Decimal { scale, precision } => CanonLogical::Decimal { precision, scale },
+            LogicalType::Date => CanonLogical::Date,
+            LogicalType::Time {
+                is_adjusted_to_u_t_c,
+                unit,
+            } => CanonLogical::Time {
+                unit: unit_to_str(unit).to_string(),
+                utc: is_adjusted_to_u_t_c,
+            },
+            LogicalType::Timestamp {
+                is_adjusted_to_u_t_c,
+                unit,
+            } => CanonLogical::Timestamp {
+                unit: unit_to_str(unit).to_string(),
+                utc: is_adjusted_to_u_t_c,
+            },
+            LogicalType::Integer {
+                bit_width,
+                is_signed,
+            } => CanonLogical::Integer {
+                bit_width: bit_width,
+                signed: is_signed,
+            },
+            LogicalType::Unknown => CanonLogical::Unknown,
+            LogicalType::Json => CanonLogical::Json,
+            LogicalType::Bson => CanonLogical::Bson,
+            LogicalType::Uuid => CanonLogical::Uuid,
+            LogicalType::Float16 => CanonLogical::Float16,
+            LogicalType::Variant => CanonLogical::Variant,
+            LogicalType::Geometry => CanonLogical::Geometry,
+            LogicalType::Geography => CanonLogical::Geography,
+        });
+    } else {
+        None
+    }
 }
 
 #[derive(Serialize)]
