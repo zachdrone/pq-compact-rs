@@ -1,7 +1,7 @@
 use anyhow::Result;
-use blake3::Hasher;
 use glob::glob;
 use parquet::file::metadata::ParquetMetaDataReader;
+use parquet::schema;
 use parquet::schema::types::{BasicTypeInfo, SchemaDescriptor};
 use parquet::{
     basic::LogicalType,
@@ -45,6 +45,8 @@ async fn get_compaction_candidates(directory: &str) -> Result<Vec<FileInfo>, any
                 let total_size: i64 = md.row_groups().iter().map(|rg| rg.total_byte_size()).sum();
                 let row_group_count = md.num_row_groups();
                 let schema = md.file_metadata().schema_descr();
+                dbg!(build_node(schema.root_schema()));
+                dbg!(schema.root_schema());
 
                 Ok(FileInfo {
                     path: fp.to_str().unwrap().to_string(),
@@ -68,7 +70,6 @@ async fn get_compaction_candidates(directory: &str) -> Result<Vec<FileInfo>, any
 
 fn build_node(t: &Type) -> CanonNode {
     let basic = t.get_basic_info();
-    let name = basic.name();
     let rep = if basic.has_repetition() {
         Some(basic.repetition().to_string())
     } else {
@@ -80,6 +81,58 @@ fn build_node(t: &Type) -> CanonNode {
         None
     };
     let logical = effective_logical(t);
+
+    if t.is_group() {
+        let children = t
+            .get_fields()
+            .iter()
+            .map(|child| build_node(child.as_ref()))
+            .collect::<Vec<_>>();
+        CanonNode {
+            name: basic.name().to_string(),
+            rep,
+            logical,
+            physical: None,
+            length: None,
+            precision: None,
+            scale: None,
+            id,
+            children: Some(children),
+        }
+    } else {
+        let physical = Some(physical_to_str(t.get_physical_type()).to_string());
+
+        let length = match t {
+            Type::PrimitiveType {
+                physical_type: PhysicalType::FIXED_LEN_BYTE_ARRAY,
+                type_length,
+                ..
+            } if *type_length > 0 => Some(*type_length),
+            _ => None,
+        };
+
+        let (precision, scale) = match logical {
+            Some(CanonLogical::Decimal { .. }) => match t {
+                Type::PrimitiveType {
+                    precision, scale, ..
+                } => (Some(*precision), Some(*scale)),
+                _ => (None, None),
+            },
+            _ => (None, None),
+        };
+
+        CanonNode {
+            name: basic.name().to_string(),
+            rep,
+            logical,
+            physical,
+            length,
+            precision,
+            scale,
+            id,
+            children: None,
+        }
+    }
 }
 
 fn rep_to_str(r: Repetition) -> &'static str {
@@ -157,7 +210,7 @@ fn effective_logical(t: &Type) -> Option<CanonLogical> {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct CanonNode {
     name: String,
@@ -172,6 +225,9 @@ struct CanonNode {
     physical: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    length: Option<i32>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     precision: Option<i32>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -184,7 +240,7 @@ struct CanonNode {
     children: Option<Vec<CanonNode>>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum CanonLogical {
     String,
@@ -211,6 +267,6 @@ async fn main() {
     let results = get_compaction_candidates("files").await.unwrap();
 
     for result in results {
-        println!("{:?}", result);
+        // println!("{:?}", result);
     }
 }
