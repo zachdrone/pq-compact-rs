@@ -8,6 +8,7 @@ use parquet::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs::File;
 
 #[derive(Debug)]
@@ -15,10 +16,8 @@ struct FileInfo {
     path: String,
     file_size: u64,
     avg_row_group_size: i64,
-    schema_fingerprint: Option<String>,
+    schema_fingerprint: String,
 }
-
-impl FileInfo {}
 
 fn is_candidate(file_size: &u64, avg_row_group_size: &i64) -> bool {
     if *file_size < 64 * 1024 * 1024 || *avg_row_group_size < 32 * 1024 * 1024 {
@@ -27,8 +26,8 @@ fn is_candidate(file_size: &u64, avg_row_group_size: &i64) -> bool {
     return false;
 }
 
-fn get_compaction_candidates(dir: &str) -> Result<Vec<FileInfo>, anyhow::Error> {
-    let mut results = Vec::new();
+fn get_compaction_candidates(dir: &str) -> Result<HashMap<String, Vec<FileInfo>>> {
+    let mut results = HashMap::new();
 
     for entry in glob(&format!("{dir}/nested*.parquet")).expect("Failed to read glob pattern") {
         let fp = entry?;
@@ -60,12 +59,16 @@ fn get_compaction_candidates(dir: &str) -> Result<Vec<FileInfo>, anyhow::Error> 
             let digest = hasher.finalize();
             let fingerprint = hex::encode(digest);
 
-            results.push(FileInfo {
+            let value = FileInfo {
                 path: fp.to_str().unwrap().to_string(),
                 file_size: file_size,
                 avg_row_group_size: total_size / (row_group_count as i64),
-                schema_fingerprint: Some(fingerprint),
-            });
+                schema_fingerprint: fingerprint.clone(),
+            };
+            results
+                .entry(fingerprint)
+                .or_insert_with(Vec::new)
+                .push(value);
         }
     }
 
