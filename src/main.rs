@@ -16,7 +16,6 @@ struct FileInfo {
     path: String,
     file_size: u64,
     avg_row_group_size: i64,
-    schema_fingerprint: String,
 }
 
 fn is_candidate(file_size: &u64, avg_row_group_size: &i64) -> bool {
@@ -29,7 +28,7 @@ fn is_candidate(file_size: &u64, avg_row_group_size: &i64) -> bool {
 fn get_compaction_candidates(dir: &str) -> Result<HashMap<String, Vec<FileInfo>>> {
     let mut results = HashMap::new();
 
-    for entry in glob(&format!("{dir}/nested*.parquet")).expect("Failed to read glob pattern") {
+    for entry in glob(&format!("{dir}/*.parquet")).expect("Failed to read glob pattern") {
         let fp = entry?;
 
         let file_size = std::fs::metadata(&fp)?.len();
@@ -63,7 +62,6 @@ fn get_compaction_candidates(dir: &str) -> Result<HashMap<String, Vec<FileInfo>>
                 path: fp.to_str().unwrap().to_string(),
                 file_size: file_size,
                 avg_row_group_size: total_size / (row_group_count as i64),
-                schema_fingerprint: fingerprint.clone(),
             };
             results
                 .entry(fingerprint)
