@@ -18,13 +18,13 @@ struct FileInfo {
     schema_fingerprint: Option<String>,
 }
 
-impl FileInfo {
-    fn is_candidate(&self) -> bool {
-        if self.file_size < 64 * 1024 * 1024 || self.avg_row_group_size < 32 * 1024 * 1024 {
-            return true;
-        }
-        return false;
+impl FileInfo {}
+
+fn is_candidate(file_size: &u64, avg_row_group_size: &i64) -> bool {
+    if *file_size < 64 * 1024 * 1024 || *avg_row_group_size < 32 * 1024 * 1024 {
+        return true;
     }
+    return false;
 }
 
 fn get_compaction_candidates(dir: &str) -> Result<Vec<FileInfo>, anyhow::Error> {
@@ -47,21 +47,26 @@ fn get_compaction_candidates(dir: &str) -> Result<Vec<FileInfo>, anyhow::Error> 
         }
 
         let total_size: i64 = md.row_groups().iter().map(|rg| rg.total_byte_size()).sum();
-        let schema = md.file_metadata().schema_descr();
-        let node = build_node(schema.root_schema());
-        let canonical = serde_json::to_string(&node)?;
 
-        let mut hasher = Sha256::new();
-        hasher.update(canonical.as_bytes());
-        let digest = hasher.finalize();
-        let fingerprint = hex::encode(digest);
+        let avg_row_group_size = total_size / (row_group_count as i64);
 
-        results.push(FileInfo {
-            path: fp.to_str().unwrap().to_string(),
-            file_size: file_size,
-            avg_row_group_size: total_size / (row_group_count as i64),
-            schema_fingerprint: Some(fingerprint),
-        });
+        if is_candidate(&file_size, &avg_row_group_size) {
+            let schema = md.file_metadata().schema_descr();
+            let node = build_node(schema.root_schema());
+            let canonical = serde_json::to_string(&node)?;
+
+            let mut hasher = Sha256::new();
+            hasher.update(canonical.as_bytes());
+            let digest = hasher.finalize();
+            let fingerprint = hex::encode(digest);
+
+            results.push(FileInfo {
+                path: fp.to_str().unwrap().to_string(),
+                file_size: file_size,
+                avg_row_group_size: total_size / (row_group_count as i64),
+                schema_fingerprint: Some(fingerprint),
+            });
+        }
     }
 
     Ok(results)
