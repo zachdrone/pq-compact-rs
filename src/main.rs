@@ -1,23 +1,21 @@
 use anyhow::Result;
 use glob::glob;
 use parquet::file::metadata::ParquetMetaDataReader;
-use parquet::schema;
-use parquet::schema::types::{BasicTypeInfo, SchemaDescriptor};
 use parquet::{
     basic::LogicalType,
-    basic::{ConvertedType, Repetition, TimeUnit, Type as PhysicalType},
-    schema::{parser, printer, types::Type},
+    basic::{TimeUnit, Type as PhysicalType},
+    schema::types::Type,
 };
 use serde::Serialize;
-use std::collections::HashMap;
+use sha2::{Digest, Sha256};
 use std::fs::File;
-use std::os::unix::fs::MetadataExt;
 
 #[derive(Debug)]
 struct FileInfo {
     path: String,
     file_size: u64,
     avg_row_group_size: i64,
+    schema_fingerprint: Option<String>,
 }
 
 impl FileInfo {
@@ -29,40 +27,41 @@ impl FileInfo {
     }
 }
 
-async fn get_compaction_candidates(directory: &str) -> Result<Vec<FileInfo>, anyhow::Error> {
-    let mut handles: Vec<tokio::task::JoinHandle<Result<FileInfo>>> = Vec::new();
+fn get_compaction_candidates(dir: &str) -> Result<Vec<FileInfo>, anyhow::Error> {
     let mut results = Vec::new();
-    for entry in
-        glob(&format!("{}/nested*.parquet", directory)).expect("Failed to read glob pattern")
-    {
-        if let Ok(fp) = entry {
-            handles.push(tokio::spawn(async move {
-                let file_size = tokio::fs::metadata(&fp).await?.size();
-                let file = File::open(&fp)?;
-                let md = ParquetMetaDataReader::new()
-                    .with_page_indexes(true)
-                    .parse_and_finish(&file)?;
-                let total_size: i64 = md.row_groups().iter().map(|rg| rg.total_byte_size()).sum();
-                let row_group_count = md.num_row_groups();
-                let schema = md.file_metadata().schema_descr();
-                dbg!(build_node(schema.root_schema()));
-                dbg!(schema.root_schema());
 
-                Ok(FileInfo {
-                    path: fp.to_str().unwrap().to_string(),
-                    file_size: file_size,
-                    avg_row_group_size: total_size / (row_group_count as i64),
-                })
-            }))
-        }
-    }
+    for entry in glob(&format!("{dir}/nested*.parquet")).expect("Failed to read glob pattern") {
+        let fp = entry?;
 
-    for handle in handles {
-        if let Ok(file_info) = handle.await? {
-            if file_info.is_candidate() {
-                results.push(file_info)
-            }
+        let file_size = std::fs::metadata(&fp)?.len();
+
+        let file = File::open(&fp)?;
+
+        let md = ParquetMetaDataReader::new()
+            .with_page_indexes(true)
+            .parse_and_finish(&file)?;
+
+        let row_group_count = md.num_row_groups();
+        if row_group_count == 0 {
+            anyhow::bail!("File {:?} has no row groups", fp)
         }
+
+        let total_size: i64 = md.row_groups().iter().map(|rg| rg.total_byte_size()).sum();
+        let schema = md.file_metadata().schema_descr();
+        let node = build_node(schema.root_schema());
+        let canonical = serde_json::to_string(&node)?;
+
+        let mut hasher = Sha256::new();
+        hasher.update(canonical.as_bytes());
+        let digest = hasher.finalize();
+        let fingerprint = hex::encode(digest);
+
+        results.push(FileInfo {
+            path: fp.to_str().unwrap().to_string(),
+            file_size: file_size,
+            avg_row_group_size: total_size / (row_group_count as i64),
+            schema_fingerprint: Some(fingerprint),
+        });
     }
 
     Ok(results)
@@ -132,14 +131,6 @@ fn build_node(t: &Type) -> CanonNode {
             id,
             children: None,
         }
-    }
-}
-
-fn rep_to_str(r: Repetition) -> &'static str {
-    match r {
-        Repetition::REQUIRED => "required",
-        Repetition::OPTIONAL => "optional",
-        Repetition::REPEATED => "repeated",
     }
 }
 
@@ -264,9 +255,9 @@ enum CanonLogical {
 
 #[tokio::main]
 async fn main() {
-    let results = get_compaction_candidates("files").await.unwrap();
+    let results = get_compaction_candidates("files").unwrap();
 
     for result in results {
-        // println!("{:?}", result);
+        println!("{:?}", result);
     }
 }
