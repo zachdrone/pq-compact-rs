@@ -1,5 +1,8 @@
 use crate::plan::get_compaction_candidates;
 use clap::Parser;
+use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+use parquet::file::serialized_reader;
+use std::fs::File;
 
 pub mod plan;
 
@@ -13,9 +16,28 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    let results = get_compaction_candidates(&args.dir).unwrap();
+    let candidates = get_compaction_candidates(&args.dir).unwrap();
 
-    for result in results {
-        println!("{:?}", result);
+    for (_, files) in candidates {
+        let mut total = 0;
+        let mut curr_row = 0;
+        for file_info in files {
+            let file = File::open(&file_info.path).unwrap();
+            let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+            let mut reader: ParquetRecordBatchReader =
+                builder.with_batch_size(512).build().unwrap();
+            while let Some(batch) = reader.next() {
+                let batch = batch.unwrap();
+                // let size_bytes: usize = batch
+                //     .unwrap()
+                //     .columns()
+                //     .iter()
+                //     .map(|array| array.get_array_memory_size())
+                //     .sum();
+                // println!("{:?}", size_bytes);
+                dbg!(file_info.avg_row_group_size / (batch.num_rows() as i64));
+            }
+            break;
+        }
     }
 }
