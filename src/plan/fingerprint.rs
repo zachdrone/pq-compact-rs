@@ -1,7 +1,7 @@
 use crate::plan::file_info::FileInfo;
 use parquet::{
-    basic::LogicalType,
-    basic::{TimeUnit, Type as PhysicalType},
+    basic::{LogicalType, TimeUnit, Type as PhysicalType},
+    file::reader::{FileReader, SerializedFileReader},
     schema::types::Type,
 };
 use serde::Serialize;
@@ -212,25 +212,37 @@ pub fn get_compaction_candidates(dir: &str) -> Result<HashMap<String, Vec<FileIn
     for entry in glob(&format!("{dir}/*.parquet")).expect("Failed to read glob pattern") {
         let fp = entry?;
 
-        let file_size = std::fs::metadata(&fp)?.len();
-
         let file = File::open(&fp)?;
+        let reader = SerializedFileReader::new(file)?;
+        let meta = reader.metadata();
 
-        let md = ParquetMetaDataReader::new()
-            .with_page_indexes(true)
-            .parse_and_finish(&file)?;
+        let total_rows = meta.file_metadata().num_rows();
 
-        let row_group_count = md.num_row_groups();
-        if row_group_count == 0 {
-            anyhow::bail!("File {:?} has no row groups", fp)
+        let mut total_comp_bytes: i64 = 0;
+        let mut total_uncomp_bytes: i64 = 0;
+
+        for rg in meta.row_groups() {
+            for col in rg.columns() {
+                total_comp_bytes += col.compressed_size() as i64;
+                total_uncomp_bytes += col.uncompressed_size() as i64;
+            }
         }
 
-        let total_size: i64 = md.row_groups().iter().map(|rg| rg.total_byte_size()).sum();
+        let row_groups = meta.num_row_groups();
+        if row_groups == 0 || total_rows == 0 {
+            anyhow::bail!("File {:?} has no row groups or rows", fp)
+        }
 
-        let avg_row_group_size = total_size / (row_group_count as i64);
+        let avg_rg_comp_bytes = total_comp_bytes / row_groups as i64;
+        let avg_rg_uncomp_bytes = total_uncomp_bytes / row_groups as i64;
+        let avg_row_comp_bytes = total_comp_bytes / total_rows;
+        let avg_row_uncomp_bytes = total_uncomp_bytes / total_rows;
 
-        if is_candidate(&file_size, &avg_row_group_size) {
-            let schema = md.file_metadata().schema_descr();
+        let file_md = std::fs::metadata(&fp)?;
+        let file_size = file_md.len();
+
+        if is_candidate(&file_size, &avg_rg_comp_bytes) {
+            let schema = meta.file_metadata().schema_descr();
             let node = build_node(schema.root_schema());
             let canonical = serde_json::to_string(&node)?;
 
@@ -240,9 +252,10 @@ pub fn get_compaction_candidates(dir: &str) -> Result<HashMap<String, Vec<FileIn
             let fingerprint = hex::encode(digest);
 
             let value = FileInfo {
-                path: fp.to_str().unwrap().to_string(),
+                path: fp.to_string_lossy().into_owned(),
                 file_size: file_size,
-                avg_row_group_size: total_size / (row_group_count as i64),
+                avg_row_group_size: avg_rg_comp_bytes,
+                avg_row_size: avg_row_comp_bytes,
             };
             results
                 .entry(fingerprint)
