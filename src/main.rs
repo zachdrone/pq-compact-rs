@@ -1,11 +1,15 @@
 use crate::plan::get_compaction_candidates;
 use clap::Parser;
-use parquet::arrow::{
-    arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder},
-    arrow_writer::{ArrowWriter, ArrowWriterOptions},
-};
-use parquet::file::properties::WriterProperties
+use parquet::file::metadata::ParquetMetaDataReader;
+use parquet::file::properties::WriterProperties;
 use parquet::file::serialized_reader;
+use parquet::{
+    arrow::{
+        arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder},
+        arrow_writer::{ArrowWriter, ArrowWriterOptions},
+    },
+    file::reader::{FileReader, SerializedFileReader},
+};
 use std::fs::File;
 
 pub mod plan;
@@ -26,9 +30,16 @@ fn main() {
     for (_, files) in candidates {
         let mut total = 0;
         let mut curr_row = 0;
-        let file = File::create(format!("out_{}.parquet",i)).unwrap();
-        let props = WriterProperties::builder().set_max_row_group_size(512).build();
-        let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(props)).unwrap();
+
+        let file = File::open(&files[0].path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let arrow_schema = builder.schema().clone();
+
+        let mut file = File::create(format!("out_{}.parquet", i)).unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(512)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut file, arrow_schema, Some(props)).unwrap();
         for file_info in files {
             let file = File::open(&file_info.path).unwrap();
             let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -36,6 +47,8 @@ fn main() {
                 builder.with_batch_size(512).build().unwrap();
             while let Some(batch) = reader.next() {
                 let batch = batch.unwrap();
+                let _ = writer.write(&batch).unwrap();
+
                 // let size_bytes: usize = batch
                 //     .unwrap()
                 //     .columns()
@@ -47,5 +60,7 @@ fn main() {
             }
             break;
         }
+        writer.close().unwrap();
+        i += 1;
     }
 }
