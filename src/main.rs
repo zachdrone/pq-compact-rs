@@ -29,9 +29,6 @@ fn main() {
 
     let mut i = 0;
     for (_, files) in candidates {
-        let mut total = 0;
-        let mut curr_row = 0;
-
         let file = File::open(&files[0].path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         let arrow_schema = builder.schema().clone();
