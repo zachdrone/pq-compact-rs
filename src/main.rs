@@ -45,6 +45,7 @@ fn main() {
             let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
             let mut reader: ParquetRecordBatchReader =
                 builder.with_batch_size(512).build().unwrap();
+            println!("reading file {}", file_info.path);
             while let Some(batch) = reader.next() {
                 let batch = batch.unwrap();
                 let _ = writer.write(&batch).unwrap();
@@ -58,7 +59,6 @@ fn main() {
                 // println!("{:?}", size_bytes);
                 // dbg!(file_info.avg_row_group_size / (batch.num_rows() as i64));
             }
-            break;
         }
         writer.close().unwrap();
         i += 1;
