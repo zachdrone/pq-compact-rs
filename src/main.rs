@@ -11,6 +11,7 @@ use parquet::{
     file::reader::{FileReader, SerializedFileReader},
 };
 use std::fs::File;
+use std::io::{self, Write};
 
 pub mod plan;
 
@@ -35,11 +36,11 @@ fn main() {
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         let arrow_schema = builder.schema().clone();
 
-        let mut file = File::create(format!("out_{}.parquet", i)).unwrap();
+        let file = File::create(format!("out_{}.parquet", i)).unwrap();
         let props = WriterProperties::builder()
             .set_max_row_group_size(512)
             .build();
-        let mut writer = ArrowWriter::try_new(&mut file, arrow_schema, Some(props)).unwrap();
+        let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props)).unwrap();
         for file_info in files {
             let file = File::open(&file_info.path).unwrap();
             let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
@@ -48,7 +49,10 @@ fn main() {
             println!("reading file {}", file_info.path);
             while let Some(batch) = reader.next() {
                 let batch = batch.unwrap();
-                let _ = writer.write(&batch).unwrap();
+                let _ = writer.write(&batch);
+                dbg!(writer.bytes_written());
+                writer.flush().unwrap();
+                dbg!(writer.bytes_written()); // Number of bytes written to sink (after flush)
 
                 // let size_bytes: usize = batch
                 //     .unwrap()
