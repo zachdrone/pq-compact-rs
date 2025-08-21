@@ -254,8 +254,8 @@ pub fn get_compaction_candidates(dir: &str) -> Result<HashMap<String, Vec<FileIn
             let value = FileInfo {
                 path: fp.to_string_lossy().into_owned(),
                 file_size: file_size,
-                avg_row_group_size: avg_rg_comp_bytes,
-                avg_row_size: avg_row_comp_bytes,
+                avg_rg_comp_bytes: avg_rg_comp_bytes,
+                avg_row_comp_bytes: avg_row_comp_bytes,
             };
             results
                 .entry(fingerprint)

@@ -33,33 +33,26 @@ fn main() {
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         let arrow_schema = builder.schema().clone();
 
-        let file = File::create(format!("out_{}.parquet", i)).unwrap();
-        let props = WriterProperties::builder()
-            .set_max_row_group_size(512)
-            .build();
+        let file = File::create(format!("output/out_{}.parquet", i)).unwrap();
+        let props = WriterProperties::builder().build();
         let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props)).unwrap();
+        let mut bytes_written = 0;
         for file_info in files {
             let file = File::open(&file_info.path).unwrap();
             let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-            let mut reader: ParquetRecordBatchReader =
-                builder.with_batch_size(512).build().unwrap();
+            let mut reader: ParquetRecordBatchReader = builder.build().unwrap();
             println!("reading file {}", file_info.path);
             while let Some(batch) = reader.next() {
                 let batch = batch.unwrap();
                 let _ = writer.write(&batch);
-                dbg!(writer.bytes_written());
-                writer.flush().unwrap();
-                dbg!(writer.bytes_written()); // Number of bytes written to sink (after flush)
-
-                // let size_bytes: usize = batch
-                //     .unwrap()
-                //     .columns()
-                //     .iter()
-                //     .map(|array| array.get_array_memory_size())
-                //     .sum();
-                // println!("{:?}", size_bytes);
-                // dbg!(file_info.avg_row_group_size / (batch.num_rows() as i64));
+                bytes_written += (batch.num_rows() as i64) * file_info.avg_row_comp_bytes;
+                if bytes_written >= 128 * 1024 * 1024 {
+                    println!("flushing {} bytes", bytes_written);
+                    writer.flush().unwrap();
+                    bytes_written = 0;
+                }
             }
+            writer.flush().unwrap()
         }
         writer.close().unwrap();
         i += 1;
