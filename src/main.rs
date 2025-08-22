@@ -35,29 +35,27 @@ fn main() {
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
         let arrow_schema = builder.schema().clone();
 
+        let avg_row_size: i64 = files
+            .iter()
+            .map(|info| info.avg_row_comp_bytes)
+            .sum::<i64>()
+            / (files.len() as i64);
+        let target_rg_size: i64 = 128 * 1024 * 1024;
+        let max_rg_size = (target_rg_size / avg_row_size) as usize;
+
         let file = File::create(format!("output/out_{}.parquet", i)).unwrap();
         let props = WriterProperties::builder()
-            .set_max_row_group_size(1000000000000000)
+            .set_max_row_group_size(max_rg_size)
             .build();
         let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
-        let mut batches: Vec<RecordBatch> = Vec::new();
-        let mut rows_written = 0;
+
         for file_info in files {
             let file = File::open(&file_info.path).unwrap();
             let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
             let mut reader: ParquetRecordBatchReader = builder.build().unwrap();
-            let target_row_count = (126 * 1024 * 1024) / file_info.avg_row_comp_bytes;
             while let Some(batch) = reader.next() {
                 let batch = batch.unwrap();
-                rows_written += batch.num_rows();
-                batches.push(batch);
-                if rows_written as i64 >= target_row_count {
-                    let big_batch = concat_batches(&arrow_schema, &batches).unwrap();
-                    let _ = writer.write(&big_batch);
-                    writer.flush().unwrap();
-                    rows_written = 0;
-                    batches.clear();
-                }
+                let _ = writer.write(&batch);
             }
             writer.flush().unwrap()
         }
