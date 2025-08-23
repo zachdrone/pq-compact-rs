@@ -5,8 +5,13 @@ use parquet::arrow::{
     arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder},
     arrow_writer::ArrowWriter,
 };
+use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::WriterProperties;
 use std::fs::File;
+use std::{
+    io::BufWriter,
+    path::{Path, PathBuf},
+};
 
 pub mod plan;
 
@@ -17,54 +22,72 @@ struct Args {
     dir: String,
 }
 
-fn compact_files(files: Vec<FileInfo>, file_id: &str) -> anyhow::Result<()> {
+const TARGET_RG_BYTES: u64 = 56 * 1024 * 1024;
+const TARGET_FILE_BYTES: u64 = 128 * 1024 * 1024;
+const MIN_RG_ROWS: usize = 100;
+const MAX_RG_ROWS: usize = 4_000_000;
+
+fn compact_files(
+    files: Vec<FileInfo>,
+    file_id: &str,
+    out_dir: &Path,
+) -> anyhow::Result<Vec<PathBuf>> {
     // Get schema
     let file = File::open(&files[0].path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let arrow_schema = builder.schema().clone();
 
     // Compute max rg size
-    let avg_row_size: i64 = files
-        .iter()
-        .map(|info| info.avg_row_comp_bytes)
-        .sum::<i64>()
-        / (files.len() as i64);
-    let target_rg_size: i64 = 128 * 1024 * 1024;
-    let max_rg_size = (target_rg_size / avg_row_size) as usize;
+    let avg_row_size_bytes: u64 = {
+        let sum: i128 = files.iter().map(|f| f.avg_row_comp_bytes as i128).sum();
+        let n = files.len() as i128;
+        let avg = if n > 0 { sum / n } else { 0 };
+        if avg <= 0 { 1024 } else { avg as u64 }
+    };
+    let max_rg_rows = (TARGET_RG_BYTES / avg_row_size_bytes)
+        .clamp(MIN_RG_ROWS as u64, MAX_RG_ROWS as u64) as usize;
 
-    // Create first output file and writer
-    let mut file_num = 0;
-    let file = File::create(format!("output/out_{}_{}.parquet", file_id, file_num))?;
     let props = WriterProperties::builder()
-        .set_max_row_group_size(max_rg_size)
+        .set_compression(Compression::ZSTD(ZstdLevel::default()))
+        .set_dictionary_enabled(true)
+        .set_max_row_group_size(max_rg_rows)
         .build();
-    let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props))?;
 
-    // Loop through each file
-    for file_info in files {
-        // Read file
-        let file = File::open(&file_info.path)?;
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-        let mut reader: ParquetRecordBatchReader = builder.build()?;
+    let make_writer =
+        |idx: usize| -> Result<(ArrowWriter<BufWriter<File>>, PathBuf), anyhow::Error> {
+            let path = out_dir.join(format!("{}_{}.parquet", file_id, idx));
+            let file = File::create(&path)?;
+            let buf = BufWriter::new(file);
+            let writer = ArrowWriter::try_new(buf, arrow_schema.clone(), Some(props.clone()))?;
+            Ok((writer, path))
+        };
+
+    let mut outputs = Vec::new();
+    let mut file_idx = 0usize;
+    let (mut writer, first_path) = make_writer(file_idx)?;
+    outputs.push(first_path);
+
+    for info in files {
+        let f = File::open(&info.path)?;
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new(f)?.build()?;
+
         while let Some(batch) = reader.next() {
             let batch = batch?;
-            let _ = writer.write(&batch);
-            writer.flush()?;
 
-            // Write to new file if upper bound for file size has been surpassed
-            if writer.bytes_written() >= 512 * 1024 * 1024 {
+            if (writer.bytes_written() as u64) >= TARGET_FILE_BYTES {
                 writer.close()?;
-                file_num += 1;
-                let file = File::create(format!("output/out_{}_{}.parquet", file_id, file_num))?;
-                let props = WriterProperties::builder()
-                    .set_max_row_group_size(max_rg_size)
-                    .build();
-                writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props))?;
+                file_idx += 1;
+                let (w, p) = make_writer(file_idx)?;
+                outputs.push(p);
+                writer = w;
             }
+
+            writer.write(&batch)?;
         }
     }
+
     writer.close()?;
-    Ok(())
+    Ok(outputs)
 }
 
 fn main() {
@@ -73,7 +96,7 @@ fn main() {
     let candidates = get_compaction_candidates(&args.dir).unwrap();
 
     for (fingerprint, files) in candidates {
-        let _ = match compact_files(files, &fingerprint) {
+        let _ = match compact_files(files, &fingerprint, Path::new("output")) {
             Ok(_) => continue,
             Err(_) => println!("something failed"),
         };
