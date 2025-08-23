@@ -1,10 +1,7 @@
 use crate::plan::file_info::FileInfo;
 use crate::plan::get_compaction_candidates;
 use clap::Parser;
-use parquet::arrow::{
-    arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder},
-    arrow_writer::ArrowWriter,
-};
+use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, arrow_writer::ArrowWriter};
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::WriterProperties;
 use std::fs::File;
@@ -32,12 +29,10 @@ fn compact_files(
     file_id: &str,
     out_dir: &Path,
 ) -> anyhow::Result<Vec<PathBuf>> {
-    // Get schema
     let file = File::open(&files[0].path)?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let arrow_schema = builder.schema().clone();
 
-    // Compute max rg size
     let avg_row_size_bytes: u64 = {
         let sum: i128 = files.iter().map(|f| f.avg_row_comp_bytes as i128).sum();
         let n = files.len() as i128;
