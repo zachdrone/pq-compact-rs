@@ -43,7 +43,8 @@ fn main() {
         let target_rg_size: i64 = 128 * 1024 * 1024;
         let max_rg_size = (target_rg_size / avg_row_size) as usize;
 
-        let file = File::create(format!("output/out_{}.parquet", i)).unwrap();
+        let mut file_num = 0;
+        let file = File::create(format!("output/out_{}_{}.parquet", i, file_num)).unwrap();
         let props = WriterProperties::builder()
             .set_max_row_group_size(max_rg_size)
             .build();
@@ -56,8 +57,17 @@ fn main() {
             while let Some(batch) = reader.next() {
                 let batch = batch.unwrap();
                 let _ = writer.write(&batch);
+                writer.flush().unwrap();
+                if writer.bytes_written() >= 512 * 1024 * 1024 {
+                    file_num += 1;
+                    let file =
+                        File::create(format!("output/out_{}_{}.parquet", i, file_num)).unwrap();
+                    let props = WriterProperties::builder()
+                        .set_max_row_group_size(max_rg_size)
+                        .build();
+                    writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+                }
             }
-            writer.flush().unwrap()
         }
         writer.close().unwrap();
         i += 1;
