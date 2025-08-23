@@ -17,10 +17,10 @@ struct Args {
     dir: String,
 }
 
-fn compact_files(files: Vec<FileInfo>, file_id: &str) {
+fn compact_files(files: Vec<FileInfo>, file_id: &str) -> anyhow::Result<()> {
     // Get schema
-    let file = File::open(&files[0].path).unwrap();
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+    let file = File::open(&files[0].path)?;
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     let arrow_schema = builder.schema().clone();
 
     // Compute max rg size
@@ -34,37 +34,37 @@ fn compact_files(files: Vec<FileInfo>, file_id: &str) {
 
     // Create first output file and writer
     let mut file_num = 0;
-    let file = File::create(format!("output/out_{}_{}.parquet", file_id, file_num)).unwrap();
+    let file = File::create(format!("output/out_{}_{}.parquet", file_id, file_num))?;
     let props = WriterProperties::builder()
         .set_max_row_group_size(max_rg_size)
         .build();
-    let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+    let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props))?;
 
     // Loop through each file
     for file_info in files {
         // Read file
-        let file = File::open(&file_info.path).unwrap();
-        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        let mut reader: ParquetRecordBatchReader = builder.build().unwrap();
+        let file = File::open(&file_info.path)?;
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+        let mut reader: ParquetRecordBatchReader = builder.build()?;
         while let Some(batch) = reader.next() {
-            let batch = batch.unwrap();
+            let batch = batch?;
             let _ = writer.write(&batch);
-            writer.flush().unwrap();
+            writer.flush()?;
 
             // Write to new file if upper bound for file size has been surpassed
             if writer.bytes_written() >= 512 * 1024 * 1024 {
-                writer.close().unwrap();
+                writer.close()?;
                 file_num += 1;
-                let file =
-                    File::create(format!("output/out_{}_{}.parquet", file_id, file_num)).unwrap();
+                let file = File::create(format!("output/out_{}_{}.parquet", file_id, file_num))?;
                 let props = WriterProperties::builder()
                     .set_max_row_group_size(max_rg_size)
                     .build();
-                writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+                writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props))?;
             }
         }
     }
-    writer.close().unwrap();
+    writer.close()?;
+    Ok(())
 }
 
 fn main() {
@@ -73,6 +73,9 @@ fn main() {
     let candidates = get_compaction_candidates(&args.dir).unwrap();
 
     for (fingerprint, files) in candidates {
-        compact_files(files, &fingerprint);
+        let _ = match compact_files(files, &fingerprint) {
+            Ok(_) => continue,
+            Err(_) => println!("something failed"),
+        };
     }
 }
