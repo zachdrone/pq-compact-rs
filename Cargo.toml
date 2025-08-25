@@ -11,7 +11,9 @@ sha2 = "0.10"
 hex = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-parquet = "56.0.0"
+parquet = { version = "56.0.0", features = ["async", "object_store"] }
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4.5.45", features = ["derive"] }
 arrow-select = "56.0.0"
+futures = "0.3.31"
+object_store = { version = "0.12.3", features = ["aws"] }
