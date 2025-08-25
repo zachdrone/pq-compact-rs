@@ -24,7 +24,7 @@ const TARGET_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MIN_RG_ROWS: usize = 100;
 const MAX_RG_ROWS: usize = 4_000_000;
 
-fn compact_files(
+fn compact_local_files(
     files: Vec<FileInfo>,
     file_id: &str,
     out_dir: &Path,
@@ -91,7 +91,7 @@ fn main() {
     let candidates = get_compaction_candidates(&args.dir).unwrap();
 
     for (fingerprint, files) in candidates {
-        let _ = match compact_files(files, &fingerprint, Path::new("output")) {
+        let _ = match compact_local_files(files, &fingerprint, Path::new("output")) {
             Ok(_) => continue,
             Err(_) => println!("something failed"),
         };
