@@ -277,7 +277,7 @@ pub fn get_compaction_candidates(dir: &str) -> Result<HashMap<String, Vec<FileIn
     Ok(results)
 }
 
-pub async fn get_compaction_candidates_async(
+pub async fn get_compaction_candidates_s3(
     object_store: Arc<dyn ObjectStore>,
     prefix: object_store::path::Path,
 ) -> Result<HashMap<String, Vec<FileInfo>>> {
