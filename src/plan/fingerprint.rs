@@ -1,5 +1,6 @@
 use crate::plan::file_info::FileInfo;
 use parquet::{
+    arrow::async_reader::AsyncFileReader,
     basic::{LogicalType, TimeUnit, Type as PhysicalType},
     file::reader::{FileReader, SerializedFileReader},
     schema::types::Type,
@@ -282,61 +283,58 @@ pub async fn get_compaction_candidates_async(
 ) -> Result<HashMap<String, Vec<FileInfo>>> {
     let mut results = HashMap::new();
 
-    // let prefix = object_store::path::Path::from(prefix_str);
+    let mut list_files_stream = object_store.list(Some(&prefix));
+    while let Some(Ok(key)) = list_files_stream.next().await {
+        let parquet = ParquetObjectReader::new(object_store.clone(), key.location.clone());
+        let builder = ParquetRecordBatchStreamBuilder::new(parquet).await.unwrap();
+        let total_rows = builder.metadata().file_metadata().num_rows();
+        let meta = builder.metadata();
 
-    let mut stream = object_store.list(Some(&prefix));
-    while let Some(key) = stream.next().await {
-        dbg!(key.unwrap());
-        // let file = File::open(&fp)?;
-        // let reader = SerializedFileReader::new(file)?;
-        // let meta = reader.metadata();
-        //
-        // let total_rows = meta.file_metadata().num_rows();
-        //
-        // let mut total_comp_bytes: i64 = 0;
-        // let mut total_uncomp_bytes: i64 = 0;
-        //
-        // for rg in meta.row_groups() {
-        //     for col in rg.columns() {
-        //         total_comp_bytes += col.compressed_size() as i64;
-        //         total_uncomp_bytes += col.uncompressed_size() as i64;
-        //     }
-        // }
-        //
-        // let row_groups = meta.num_row_groups();
-        // if row_groups == 0 || total_rows == 0 {
-        //     anyhow::bail!("File {:?} has no row groups or rows", fp)
-        // }
-        //
-        // let avg_rg_comp_bytes = total_comp_bytes / row_groups as i64;
-        // let avg_rg_uncomp_bytes = total_uncomp_bytes / row_groups as i64;
-        // let avg_row_comp_bytes = total_comp_bytes / total_rows;
-        // let avg_row_uncomp_bytes = total_uncomp_bytes / total_rows;
-        //
+        let mut total_comp_bytes: i64 = 0;
+        let mut total_uncomp_bytes: i64 = 0;
+
+        for rg in meta.row_groups() {
+            for col in rg.columns() {
+                total_comp_bytes += col.compressed_size() as i64;
+                total_uncomp_bytes += col.uncompressed_size() as i64;
+            }
+        }
+
+        let row_groups = meta.num_row_groups();
+        if row_groups == 0 || total_rows == 0 {
+            anyhow::bail!("File {:?} has no row groups or rows", &key.location)
+        }
+
+        let avg_rg_comp_bytes = total_comp_bytes / row_groups as i64;
+        let avg_rg_uncomp_bytes = total_uncomp_bytes / row_groups as i64;
+        let avg_row_comp_bytes = total_comp_bytes / total_rows;
+        let avg_row_uncomp_bytes = total_uncomp_bytes / total_rows;
+
         // let file_md = std::fs::metadata(&fp)?;
         // let file_size = file_md.len();
-        //
-        // if is_candidate(&file_size, &avg_rg_comp_bytes) {
-        //     let schema = meta.file_metadata().schema_descr();
-        //     let node = build_node(schema.root_schema());
-        //     let canonical = serde_json::to_string(&node)?;
-        //
-        //     let mut hasher = Sha256::new();
-        //     hasher.update(canonical.as_bytes());
-        //     let digest = hasher.finalize();
-        //     let fingerprint = hex::encode(digest);
-        //
-        //     let value = FileInfo {
-        //         path: fp.to_string_lossy().into_owned(),
-        //         file_size: file_size,
-        //         avg_rg_comp_bytes: avg_rg_comp_bytes,
-        //         avg_row_comp_bytes: avg_row_comp_bytes,
-        //     };
-        //     results
-        //         .entry(fingerprint)
-        //         .or_insert_with(Vec::new)
-        //         .push(value);
-        // }
+        let file_size = key.size;
+
+        if is_candidate(&file_size, &avg_rg_comp_bytes) {
+            let schema = meta.file_metadata().schema_descr();
+            let node = build_node(schema.root_schema());
+            let canonical = serde_json::to_string(&node)?;
+
+            let mut hasher = Sha256::new();
+            hasher.update(canonical.as_bytes());
+            let digest = hasher.finalize();
+            let fingerprint = hex::encode(digest);
+
+            let value = FileInfo {
+                path: key.location.to_string().to_owned(),
+                file_size: file_size,
+                avg_rg_comp_bytes: avg_rg_comp_bytes,
+                avg_row_comp_bytes: avg_row_comp_bytes,
+            };
+            results
+                .entry(fingerprint)
+                .or_insert_with(Vec::new)
+                .push(value);
+        }
     }
 
     Ok(results)

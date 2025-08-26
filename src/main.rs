@@ -181,7 +181,10 @@ async fn main() {
 
     let prefix = object_store::path::Path::from("files/");
 
-    let candidates = get_compaction_candidates_async(object_store, prefix).await;
+    let candidates = get_compaction_candidates_async(object_store, prefix)
+        .await
+        .unwrap();
+    dbg!(candidates);
 
     // let candidates = get_compaction_candidates(&args.dir).unwrap();
 
