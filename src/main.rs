@@ -1,4 +1,5 @@
 use crate::plan::file_info::FileInfo;
+use crate::plan::fingerprint::get_compaction_candidates_async;
 use crate::plan::get_compaction_candidates;
 use clap::Parser;
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, arrow_writer::ArrowWriter};
@@ -171,12 +172,23 @@ async fn compact_local_files(
 async fn main() {
     let args = Args::parse();
 
-    let candidates = get_compaction_candidates(&args.dir).unwrap();
+    let object_store: Arc<dyn ObjectStore> = Arc::new(
+        AmazonS3Builder::from_env()
+            .with_bucket_name("drone-sandbox")
+            .build()
+            .unwrap(),
+    );
 
-    for (fingerprint, files) in candidates {
-        let _ = match compact_local_files(files, &fingerprint, Path::new("output")).await {
-            Ok(_) => continue,
-            Err(_) => println!("something failed"),
-        };
-    }
+    let prefix = object_store::path::Path::from("files/");
+
+    let candidates = get_compaction_candidates_async(object_store, prefix).await;
+
+    // let candidates = get_compaction_candidates(&args.dir).unwrap();
+
+    // for (fingerprint, files) in candidates {
+    //     let _ = match compact_local_files(files, &fingerprint, Path::new("output")).await {
+    //         Ok(_) => continue,
+    //         Err(_) => println!("something failed"),
+    //     };
+    // }
 }
