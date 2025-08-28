@@ -27,7 +27,10 @@ pub mod plan;
 #[command(version, about, long_about = None)]
 struct Args {
     #[arg(short, long)]
-    dir: String,
+    input: String,
+
+    #[arg(short, long)]
+    output: String,
 }
 
 const TARGET_RG_BYTES: u64 = 56 * 1024 * 1024;
@@ -189,7 +192,7 @@ async fn main() {
             .unwrap(),
     );
 
-    let prefix = object_store::path::Path::from("files/");
+    let prefix = object_store::path::Path::from(format!("{}/", args.input));
 
     let candidates = get_compaction_candidates_s3(object_store, prefix)
         .await
@@ -199,7 +202,7 @@ async fn main() {
         let _ = match compact_s3_files(
             files,
             &fingerprint,
-            &object_store::path::Path::from("output"),
+            &object_store::path::Path::from(format!("{}", args.output)),
         )
         .await
         {
