@@ -18,6 +18,7 @@ use parquet::arrow::async_reader::{
 
 use anyhow::Result;
 use glob::glob;
+use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::file::metadata::ParquetMetaDataReader;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -285,10 +286,10 @@ pub async fn get_compaction_candidates_s3(
 
     let mut list_files_stream = object_store.list(Some(&prefix));
     while let Some(Ok(key)) = list_files_stream.next().await {
-        let parquet = ParquetObjectReader::new(object_store.clone(), key.location.clone());
-        let builder = ParquetRecordBatchStreamBuilder::new(parquet).await.unwrap();
-        let total_rows = builder.metadata().file_metadata().num_rows();
-        let meta = builder.metadata();
+        let mut reader = ParquetObjectReader::new(object_store.clone(), key.location.clone());
+        let opts = ArrowReaderOptions::default();
+        let meta = reader.get_metadata(Some(&opts)).await?;
+        let total_rows = meta.file_metadata().num_rows();
 
         let mut total_comp_bytes: i64 = 0;
         let mut total_uncomp_bytes: i64 = 0;
