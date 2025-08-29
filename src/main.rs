@@ -115,7 +115,7 @@ async fn compact_s3_files(
 
     let parquet = ParquetObjectReader::new(store.clone(), prefix);
 
-    let builder = ParquetRecordBatchStreamBuilder::new(parquet).await.unwrap();
+    let builder = ParquetRecordBatchStreamBuilder::new(parquet).await?;
     let arrow_schema = builder.schema().clone();
 
     let avg_row_size_bytes: u64 = {
@@ -148,8 +148,7 @@ async fn compact_s3_files(
             object_store_writer,
             arrow_schema.clone(),
             Some(props.clone()),
-        )
-        .unwrap();
+        )?;
         Ok((writer, path))
     };
 
@@ -161,10 +160,10 @@ async fn compact_s3_files(
     for info in files {
         let parquet =
             ParquetObjectReader::new(store.clone(), object_store::path::Path::from(info.path));
-        let builder = ParquetRecordBatchStreamBuilder::new(parquet).await.unwrap();
-        let mut stream = builder.build().unwrap();
+        let builder = ParquetRecordBatchStreamBuilder::new(parquet).await?;
+        let mut stream = builder.build()?;
 
-        while let Some(batch) = stream.next().await.transpose().unwrap() {
+        while let Some(batch) = stream.next().await.transpose()? {
             if (writer.bytes_written() as u64) >= TARGET_FILE_BYTES {
                 writer.close().await?;
                 file_idx += 1;
