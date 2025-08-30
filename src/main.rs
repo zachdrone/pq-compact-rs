@@ -270,7 +270,7 @@ async fn compact_s3_files_v2(
     Ok(outputs)
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let args = Args::parse();
     let outer = args.concurrency.unwrap_or(16);
