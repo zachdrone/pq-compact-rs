@@ -7,8 +7,10 @@ use parquet::{
 };
 use serde::Serialize;
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 use futures::StreamExt;
+use futures::TryStreamExt;
 use object_store::ObjectStore;
 use object_store::aws::AmazonS3Builder;
 
@@ -339,4 +341,87 @@ pub async fn get_compaction_candidates_s3(
     }
 
     Ok(results)
+}
+
+pub async fn get_compaction_candidates_s3_v2(
+    object_store: Arc<dyn ObjectStore>,
+    prefix: object_store::path::Path,
+) -> Result<HashMap<String, Vec<FileInfo>>> {
+    const MAX_IN_FLIGHT: usize = 64;
+    // let mut results = HashMap::new();
+    let io_sem = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
+
+    let mut results_vec: Vec<(String, FileInfo)> = object_store
+        .list(Some(&prefix))
+        .err_into::<anyhow::Error>()
+        .map_ok(|key| {
+            let object_store = object_store.clone();
+            let io_sem = io_sem.clone();
+
+            async move {
+                if !key.location.as_ref().ends_with(".parquet") {
+                    return Ok::<Option<(String, FileInfo)>, anyhow::Error>(None);
+                }
+                let _permit = io_sem.acquire().await?;
+
+                let mut reader =
+                    ParquetObjectReader::new(object_store.clone(), key.location.clone());
+                let opts = ArrowReaderOptions::default();
+                let meta = reader.get_metadata(Some(&opts)).await?;
+                let total_rows = meta.file_metadata().num_rows();
+
+                let mut total_comp_bytes: i64 = 0;
+                let mut total_uncomp_bytes: i64 = 0;
+
+                for rg in meta.row_groups() {
+                    for col in rg.columns() {
+                        total_comp_bytes += col.compressed_size() as i64;
+                        total_uncomp_bytes += col.uncompressed_size() as i64;
+                    }
+                }
+
+                let row_groups = meta.num_row_groups();
+                if row_groups == 0 || total_rows == 0 {
+                    anyhow::bail!("File {:?} has no row groups or rows", &key.location)
+                }
+
+                let avg_rg_comp_bytes = total_comp_bytes / row_groups as i64;
+                let avg_rg_uncomp_bytes = total_uncomp_bytes / row_groups as i64;
+                let avg_row_comp_bytes = total_comp_bytes / total_rows;
+                let avg_row_uncomp_bytes = total_uncomp_bytes / total_rows;
+
+                let file_size = key.size;
+
+                if is_candidate(&file_size, &avg_rg_comp_bytes) {
+                    let schema = meta.file_metadata().schema_descr();
+                    let node = build_node(schema.root_schema());
+                    let canonical = serde_json::to_string(&node)?;
+
+                    let mut hasher = Sha256::new();
+                    hasher.update(canonical.as_bytes());
+                    let digest = hasher.finalize();
+                    let fingerprint = hex::encode(digest);
+
+                    let info = FileInfo {
+                        path: key.location.to_string().to_owned(),
+                        file_size: file_size,
+                        avg_rg_comp_bytes: avg_rg_comp_bytes,
+                        avg_row_comp_bytes: avg_row_comp_bytes,
+                    };
+                    return Ok(Some((fingerprint, info)));
+                }
+                Ok(None)
+            }
+        })
+        .try_buffer_unordered(MAX_IN_FLIGHT)
+        .try_filter_map(async move |x| Ok(x))
+        .try_collect::<Vec<(String, FileInfo)>>()
+        .await?;
+
+    let mut map: HashMap<String, Vec<FileInfo>> = HashMap::with_capacity(results_vec.len());
+
+    for (fp, info) in results_vec.drain(..) {
+        map.entry(fp).or_default().push(info);
+    }
+    Ok(map)
 }
