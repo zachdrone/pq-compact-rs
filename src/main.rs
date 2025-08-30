@@ -1,5 +1,5 @@
 use crate::plan::file_info::FileInfo;
-use crate::plan::fingerprint::{get_compaction_candidates_s3, get_compaction_candidates_s3_v2};
+use crate::plan::fingerprint::get_compaction_candidates_s3;
 use crate::plan::get_compaction_candidates;
 use clap::Parser;
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, arrow_writer::ArrowWriter};
@@ -194,42 +194,29 @@ async fn main() {
 
     let prefix = object_store::path::Path::from(format!("{}/", args.input));
 
-    let start = Instant::now();
     let candidates = get_compaction_candidates_s3(object_store.clone(), prefix.clone())
         .await
         .unwrap();
-    let dur1 = start.elapsed();
 
-    let start = Instant::now();
-    let candidates_v2 = get_compaction_candidates_s3_v2(object_store.clone(), prefix.clone())
+    for (fingerprint, files) in candidates {
+        let _ = match compact_s3_files(
+            files,
+            &fingerprint,
+            &object_store::path::Path::from(format!("{}", args.output)),
+        )
         .await
-        .unwrap();
-    let dur2 = start.elapsed();
+        {
+            Ok(_) => continue,
+            Err(_) => println!("something failed"),
+        };
+    }
 
-    dbg!(candidates);
-    dbg!(candidates_v2);
+    let candidates = get_compaction_candidates(&args.input).unwrap();
 
-    println!("async_fn1: {:?}", dur1);
-    println!("async_fn2: {:?}", dur2);
-    // for (fingerprint, files) in candidates {
-    //     let _ = match compact_s3_files(
-    //         files,
-    //         &fingerprint,
-    //         &object_store::path::Path::from(format!("{}", args.output)),
-    //     )
-    //     .await
-    //     {
-    //         Ok(_) => continue,
-    //         Err(_) => println!("something failed"),
-    //     };
-    // }
-
-    // let candidates = get_compaction_candidates(&args.dir).unwrap();
-
-    // for (fingerprint, files) in candidates {
-    //     let _ = match compact_local_files(files, &fingerprint, Path::new("output")).await {
-    //         Ok(_) => continue,
-    //         Err(_) => println!("something failed"),
-    //     };
-    // }
+    for (fingerprint, files) in candidates {
+        let _ = match compact_local_files(files, &fingerprint, Path::new("output")).await {
+            Ok(_) => continue,
+            Err(_) => println!("something failed"),
+        };
+    }
 }
