@@ -17,3 +17,4 @@ clap = { version = "4.5.45", features = ["derive"] }
 arrow-select = "56.0.0"
 futures = "0.3.31"
 object_store = { version = "0.12.3", features = ["aws"] }
+num_cpus = "1.17.0"
