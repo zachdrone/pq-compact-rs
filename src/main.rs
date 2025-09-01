@@ -1,6 +1,7 @@
 use crate::plan::file_info::FileInfo;
 use crate::plan::fingerprint::get_compaction_candidates_s3;
 use crate::plan::get_compaction_candidates;
+use arrow::record_batch::RecordBatch;
 use clap::Parser;
 use futures::{StreamExt, stream};
 use num_cpus;
@@ -241,6 +242,27 @@ async fn compact_s3_files_v2(
         )?;
         Ok((writer, path))
     };
+
+    let (tx, mut rx) = mpsc::channel::<RecordBatch>(32);
+
+    let producers = tokio::spawn(async move {
+        stream::iter(files.into_iter().map(|info| {
+            let tx = tx.clone();
+            let store = store.clone();
+            async move {
+                let parquet =
+                    ParquetObjectReader::new(store, object_store::path::Path::from(info.path));
+                let builder = ParquetRecordBatchStreamBuilder::new(parquet).await.unwrap();
+                let mut stream = builder.build().unwrap();
+
+                while let Some(batch) = stream.next().await.transpose().unwrap() {
+                    tx.send(batch);
+                }
+            }
+        }))
+        .buffer_unordered(16)
+        .collect();
+    });
 
     let mut outputs = Vec::new();
     let mut file_idx = 0usize;
