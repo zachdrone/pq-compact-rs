@@ -3,7 +3,7 @@ use crate::plan::fingerprint::get_compaction_candidates_s3;
 use crate::plan::get_compaction_candidates;
 use arrow::record_batch::RecordBatch;
 use clap::Parser;
-use futures::{StreamExt, stream};
+use futures::{StreamExt, TryStreamExt, stream};
 use num_cpus;
 use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, arrow_writer::ArrowWriter};
 use parquet::basic::{Compression, ZstdLevel};
@@ -14,6 +14,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use tokio::sync::Semaphore;
+use tokio::task::JoinHandle;
 
 use object_store::ObjectStore;
 use object_store::aws::AmazonS3Builder;
@@ -245,23 +246,29 @@ async fn compact_s3_files_v2(
 
     let (tx, mut rx) = mpsc::channel::<RecordBatch>(32);
 
-    let producers = tokio::spawn(async move {
+    let store_for_producers = store.clone();
+    let producers: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
         stream::iter(files.into_iter().map(|info| {
             let tx = tx.clone();
-            let store = store.clone();
+            let store = store_for_producers.clone();
             async move {
                 let parquet =
                     ParquetObjectReader::new(store, object_store::path::Path::from(info.path));
-                let builder = ParquetRecordBatchStreamBuilder::new(parquet).await.unwrap();
-                let mut stream = builder.build().unwrap();
+                let builder = ParquetRecordBatchStreamBuilder::new(parquet).await?;
+                let mut stream = builder.build()?;
 
-                while let Some(batch) = stream.next().await.transpose().unwrap() {
-                    tx.send(batch);
+                while let Some(batch) = stream.next().await.transpose()? {
+                    if tx.send(batch).await.is_err() {
+                        break;
+                    }
                 }
+                Ok::<(), anyhow::Error>(())
             }
         }))
         .buffer_unordered(16)
-        .collect();
+        .try_collect::<Vec<_>>()
+        .await
+        .map(|_| ())
     });
 
     let mut outputs = Vec::new();
@@ -269,26 +276,21 @@ async fn compact_s3_files_v2(
     let (mut writer, first_path) = make_writer(file_idx, &store)?;
     outputs.push(first_path);
 
-    for info in files {
-        let parquet =
-            ParquetObjectReader::new(store.clone(), object_store::path::Path::from(info.path));
-        let builder = ParquetRecordBatchStreamBuilder::new(parquet).await?;
-        let mut stream = builder.build()?;
-
-        while let Some(batch) = stream.next().await.transpose()? {
-            if (writer.bytes_written() as u64) >= TARGET_FILE_BYTES {
-                writer.close().await?;
-                file_idx += 1;
-                let (w, p) = make_writer(file_idx, &store)?;
-                outputs.push(p);
-                writer = w;
-            }
-
-            writer.write(&batch).await?;
+    while let Some(b) = rx.recv().await {
+        if (writer.bytes_written() as u64) >= TARGET_FILE_BYTES {
+            writer.close().await?;
+            file_idx += 1;
+            let (w, p) = make_writer(file_idx, &store)?;
+            outputs.push(p);
+            writer = w;
         }
-    }
 
+        writer.write(&b).await?;
+    }
     writer.close().await?;
+
+    producers.await??;
+
     Ok(outputs)
 }
 
@@ -325,7 +327,7 @@ async fn main() {
 
         async move {
             let fp = fingerprint;
-            match compact_s3_files(files, &fp, &out_path, &object_store).await {
+            match compact_s3_files_v2(files, &fp, &out_path).await {
                 Ok(outputs) => Ok::<Vec<object_store::path::Path>, anyhow::Error>(outputs),
                 Err(e) => Err(anyhow::anyhow!("{fp} failed: {e}")),
             }
