@@ -142,9 +142,14 @@ async fn compact_s3_files(
         .set_max_row_group_size(max_rg_rows)
         .build();
 
-    let make_writer = |idx: usize,
-                       store: &Arc<dyn ObjectStore>|
-     -> Result<
+    let store = store.clone();
+    let props = props.clone();
+    let out_dir_prefix = out_dir_prefix.clone();
+    let file_id = file_id.to_string();
+
+    let make_writer = move |idx: usize,
+                            store: &Arc<dyn ObjectStore>|
+          -> Result<
         (
             AsyncArrowWriter<ParquetObjectWriter>,
             object_store::path::Path,
@@ -188,27 +193,30 @@ async fn compact_s3_files(
         .map(|_| ())
     });
 
-    let mut outputs = Vec::new();
+    let mut o = Vec::new();
     let mut file_idx = 0usize;
     let (mut writer, first_path) = make_writer(file_idx, &store)?;
-    outputs.push(first_path);
+    o.push(first_path);
 
-    while let Some(b) = rx.recv().await {
-        if (writer.bytes_written() as u64) >= TARGET_FILE_BYTES {
-            writer.close().await?;
-            file_idx += 1;
-            let (w, p) = make_writer(file_idx, &store)?;
-            outputs.push(p);
-            writer = w;
+    let outputs = tokio::spawn(async move {
+        while let Some(b) = rx.recv().await {
+            if (writer.bytes_written() as u64) >= TARGET_FILE_BYTES {
+                writer.close().await?;
+                file_idx += 1;
+                let (w, p) = make_writer(file_idx, &store)?;
+                o.push(p);
+                writer = w;
+            }
+
+            writer.write(&b).await?;
         }
+        writer.close().await?;
 
-        writer.write(&b).await?;
-    }
-    writer.close().await?;
+        producers.await??;
+        Ok::<Vec<object_store::path::Path>, anyhow::Error>(o)
+    });
 
-    producers.await??;
-
-    Ok(outputs)
+    Ok(outputs.await??)
 }
 
 #[tokio::main(flavor = "multi_thread")]
