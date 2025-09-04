@@ -231,7 +231,14 @@ async fn main() {
         cpu: Arc::new(Semaphore::new(cpu_limit)),
     };
 
-    let object_store: Arc<dyn ObjectStore> = Arc::new(
+    let input_store: Arc<dyn ObjectStore> = Arc::new(
+        AmazonS3Builder::from_env()
+            .with_bucket_name("drone-sandbox")
+            .build()
+            .unwrap(),
+    );
+
+    let output_store: Arc<dyn ObjectStore> = Arc::new(
         AmazonS3Builder::from_env()
             .with_bucket_name("drone-sandbox")
             .build()
@@ -240,19 +247,19 @@ async fn main() {
 
     let prefix = object_store::path::Path::from(format!("{}/", args.input));
 
-    let candidates = get_compaction_candidates_s3(object_store.clone(), prefix.clone())
+    let candidates = get_compaction_candidates_s3(input_store.clone(), prefix.clone())
         .await
         .unwrap();
 
     let out_path = object_store::path::Path::from(args.output.clone());
     let _results = stream::iter(candidates.into_iter().map(|(fingerprint, files)| {
-        let object_store = object_store.clone();
+        let store = output_store.clone();
         let out_path = out_path.clone();
         let _limits = limits.clone();
 
         async move {
             let fp = fingerprint;
-            match compact_s3_files(files, &fp, &out_path, &object_store).await {
+            match compact_s3_files(files, &fp, &out_path, &store).await {
                 Ok(outputs) => Ok::<Vec<object_store::path::Path>, anyhow::Error>(outputs),
                 Err(e) => Err(anyhow::anyhow!("{fp} failed: {e}")),
             }
