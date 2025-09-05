@@ -35,6 +35,12 @@ struct Args {
     output: String,
 
     #[arg(long)]
+    input_bucket: String,
+
+    #[arg(long)]
+    output_bucket: String,
+
+    #[arg(long)]
     concurrency: Option<usize>,
 
     #[arg(long)]
@@ -233,14 +239,14 @@ async fn main() {
 
     let input_store: Arc<dyn ObjectStore> = Arc::new(
         AmazonS3Builder::from_env()
-            .with_bucket_name("drone-sandbox")
+            .with_bucket_name(args.input_bucket)
             .build()
             .unwrap(),
     );
 
     let output_store: Arc<dyn ObjectStore> = Arc::new(
         AmazonS3Builder::from_env()
-            .with_bucket_name("drone-sandbox")
+            .with_bucket_name(args.output_bucket)
             .build()
             .unwrap(),
     );
