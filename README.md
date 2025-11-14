@@ -14,7 +14,7 @@ This project is still experimental and may change over time.
 
 ### Requirements
 
--   Rust (stable toolchain)
+-   Rust
 -   Credentials for whatever bucket(s) you're accessing
 -   `cargo` available on your system
 
@@ -70,10 +70,10 @@ Or with a release binary:
 
 Key flags:
 
--   `-i, --input-prefix <PREFIX>` --- Prefix to read from\
+-   `-i, --input-prefix <PREFIX>` --- Prefix to read from
 -   `-o, --output-prefix <PREFIX>` --- Prefix to write compacted data
-    into\
--   `--input-bucket <NAME>` --- Source bucket\
+    into
+-   `--input-bucket <NAME>` --- Source bucket
 -   `--output-bucket <NAME>` --- Destination bucket
 
 ------------------------------------------------------------------------
@@ -82,11 +82,9 @@ Key flags:
 
 Typical workflow:
 
-1.  An upstream process writes many small objects to an input prefix.\
-2.  You run this tool manually or on a schedule.\
+1.  An upstream process writes many small parquet files to an input prefix.
+2.  You run this tool manually or on a schedule.
 3.  It rewrites the data into a more compact structure under a new
-    prefix.\
-4.  Downstream jobs read from that compacted prefix for better
-    performance.
-
-Useful for cleanup, periodic maintenance, or reorganizing data layouts.
+    prefix.
+4.  Downstream jobs read compacted parquet files from that prefix 
+    for better performance.
