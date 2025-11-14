@@ -1,23 +1,14 @@
 # pq-compact-rs
 
-`pq-compact-rs` is a small Rust tool for compacting object-storage data.
-It reads objects from an input prefix, runs a compaction step, and
+`pq-compact-rs` is a small Rust tool for compacting object-storage parquet data.
+It reads objects from an input prefix, runs a parquet schema fingerprinting step,
+compacts parquet files with the same schema fingerprint, and
 writes the results to an output prefix. It's useful when upstream
-systems produce lots of small files and you want to reorganize them into
+systems produce lots of small inefficient parquet files and you want to reorganize them into
 fewer, more efficient ones.
 
 This project is still experimental and may change over time.
 
-------------------------------------------------------------------------
-
-## Features
-
--   Compacts files from an input prefix into an output prefix
--   Works across buckets or within the same bucket
--   Straightforward CLI interface
--   Built in Rust for speed and reliability
-
-------------------------------------------------------------------------
 
 ## Getting Started
 
